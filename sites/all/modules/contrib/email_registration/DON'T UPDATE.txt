@@ -1,0 +1,1 @@
+funzione email_registration_cleanup_username del .module patchato dalla riga 107 alla 110

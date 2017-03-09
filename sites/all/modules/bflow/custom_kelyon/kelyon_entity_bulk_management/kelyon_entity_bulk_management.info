@@ -1,0 +1,4 @@
+name = Entity Bulk management
+description = Manage bulk operations on entity
+package = Custom Kelyon
+core = 7.x

@@ -1,0 +1,393 @@
+<?php
+
+/**
+ * Implements hook menu for entity bulk management
+ */
+function kelyon_entity_bulk_management_menu() {
+	$items = array();
+	$items['admin/config/system/ebm'] = array(
+		'title' => 'Entity Bulk Management',
+		'description' => t('Manage bulk operations on entity'),
+	    'page callback' => 'drupal_get_form',
+		'page arguments' => array('entity_bulk_management_config_form'),
+	    'access callback' => 'user_access',
+		'access arguments' => array('Administer site configuration'),
+	);
+	$items['admin/config/system/ebm/config'] = array(
+		'title' => 'Configuration',
+	    'type' => MENU_DEFAULT_LOCAL_TASK,
+	);
+	$items['admin/config/system/ebm/entity_export'] = array(
+		'title' => 'Entity export',
+	    'page callback' => 'drupal_get_form',
+		'page arguments' => array('entity_bulk_management_export_form'),
+	    'access callback' => 'user_access',
+		'access arguments' => array('Administer site configuration'),
+	    'type' => MENU_LOCAL_TASK,
+	);
+	$items['admin/config/system/ebm/entity_import'] = array(
+		'title' => 'Entity import',
+	    'page callback' => 'drupal_get_form',
+		'page arguments' => array('entity_bulk_management_import_form'),
+	    'access callback' => 'user_access',
+		'access arguments' => array('Administer site configuration'),
+	    'type' => MENU_LOCAL_TASK,
+	);	
+	$items['admin/config/system/ebm/destroy'] = array(
+		'title' => 'Entity destroy',
+	    'page callback' => 'drupal_get_form',
+		'page arguments' => array('entity_bulk_management_destroy_form'),
+	    'access callback' => 'user_access',
+		'access arguments' => array('Administer site configuration'),
+	    'type' => MENU_LOCAL_TASK,
+	);
+	return $items;
+}
+//pagina principale con la lista 
+function _entity_bulk_management_list(){
+	//creo la lista delle entita' che si possono importare ed esportare.
+	$ret = "";
+	$ret .= "<h2>".t('Available entity')."</h2>";
+	//raccolgo l'eventuale variabile scelta dalla url
+	$sel_ent = arg(4);
+	//$entities = array("patients","visits");
+	$entities = variable_get("entity_types_to_import_export",array());
+	$ret .= '
+	<div>
+		<ul class="menu">';	
+	foreach($entities as $v){
+		if($v === 0 || $v === "0") { continue; }
+		if($v == $sel_ent) { $class = "class='active active-trail'"; }
+		$class = '';
+		$ret .= '
+		<li '.$class.'>
+			<strong>'.ucfirst($v).'</strong> -';
+			//<a href="'.base_path().'admin/config/system/ebm/entity_import/'.$v.'" title="'.ucfirst($v).'">'.t('Import').'</a> -
+		$ret .= '
+			<a href="'.base_path().'admin/config/system/ebm/entity_export/'.$v.'" title="'.ucfirst($v).'">'.t('Export').'</a>
+		</li>';
+	}
+	$ret .= '
+		</ul>
+	</div>';
+	return $ret;
+}
+/**
+ * Implements entity import form
+ */
+function entity_bulk_management_import_form($form,&$form_state){
+	$form = array();
+	$options = _entity_bulk_management_get_deletable();
+	$form["import"] = array(
+		'#type' => 'fieldset',
+		'#title' => t('Entity import form'),
+	);
+	$form["import"]["entity_type"] = array(
+		'#type' => 'radios',
+		'#title' => t('Choose an entity'),
+		'#options' => $options,
+	);
+	$form["import"]["import_text"] = array(
+		'#type' => 'textarea',
+		'#title' => t('Put exportation text in the textarea below'),
+	);
+	$form["submit"] = array(
+		'#type' => 'submit',
+		'#value' => t('Submit'),
+	);	
+	return $form;
+}
+/**
+ * Implements hook form validate
+ */
+function entity_bulk_management_import_form_validate($form,&$form_state){
+	return;
+}
+/**
+ * Implements hook form submit
+ */
+function entity_bulk_management_import_form_submit($form,&$form_state){
+	$error = false;
+	$export = $form_state["values"]["import_text"];
+	if($export=='' || empty($export)) {
+		form_set_error("import_text",t('No text to import.'));
+		$error = true;
+	}
+	$entity_type = $form_state["values"]["entity_type"];
+	if($entity_type=='' || empty($entity_type)) {
+		form_set_error("entity_type",t('No entity type to import.'));
+		$error = true;
+	}
+	if($error){ 
+		return false;
+	}
+	$all = explode("/**-**/",$export);
+	$exp = "";
+	$c = 0;
+	foreach($all as $k => $v){
+		//$obj = json_decode($v);
+		//dpm($obj);
+		$e = entity_import($entity_type,$v);
+		entity_save($entity_type,$e);
+		$c++;
+	}
+	$form_state['rebuild'] = TRUE;
+	drupal_set_message($c.t(' entities imported.'));
+}
+/**
+ * Implements entity export form
+ */
+function entity_bulk_management_export_form($form,&$form_state){
+	$form = array();
+	$type = arg(5);
+	$res = _entity_bulk_management_multiple_export($type);
+	$form["export"] = array(
+		'#type' => 'fieldset',
+		'#title' => t('Entity import form'),
+	);
+	$markup = _entity_bulk_management_list();
+	$form["export"]["entity_list"] = array(
+		'#markup' => $markup
+	);
+	$form["export"]["export_text"] = array(
+		'#type' => 'textarea',
+		'#value' => $res,
+	);
+	return $form;
+}
+/**
+ * Implements hook form validate
+ */
+function entity_bulk_management_export_form_validate($form,&$form_state){
+	return;
+}
+/**
+ * Implements hook form submit
+ */
+function entity_bulk_management_export_form_submit($form,&$form_state){
+	return;
+}
+/**
+ * Ritorna una variabile di testo con l'export dell'entita'
+ * @param object or string $type
+ */
+function _entity_bulk_management_multiple_export($type){
+	if(is_object($type) || is_array($type)){
+		$e = $type;
+	} elseif(is_string($type)) {
+		$e = entity_load($type);
+	}
+	if (isset($e) && !empty($e)){
+		$res = "";
+		foreach($e as $k => $entity){
+			$res .= entity_export($type, $entity)."/**-**/";
+		}
+		$res = substr ($res, 0, -7);
+		return $res;
+	}
+	return false;
+}
+/**
+ * Questa funzione si occupa di distruggere le entita scelte
+ */
+function entity_bulk_management_destroy_form($form,&$form_state){
+	$form = $to_destroy_elements = array();
+	$string = '';
+	$to_destroy_conf = variable_get("destroyable_entity_types",array());
+	foreach($to_destroy_conf as $k => $v){
+		if($v !==0){
+			$to_destroy_elements[] = $k;
+			$string .= $k.",";
+		}
+	}
+	$string =  substr($string, 0, -1);	
+	//CASO DI CONFERMA E QUINDI DISTRUZIONE
+	if(isset($form_state['clicked_button']['#id']) && $form_state['clicked_button']['#id'] == 'edit-confirm-deletion'){
+		$form["is_confirmed"] = array(
+			"#type" => 'hidden',
+			"#value" => 1, //CONFERMATO
+		);
+		$form = confirm_form($form, t('These entities are going to be destroyed. Are you sure?'), 'admin/config/system/ebm/destroy', t('BEWARE - This action is destructive! PLEASE MAKE A BACKUP FIRST!'), t('Confirm destruction'), t('Cancel'));
+	} else { //CASO DI PRIMO ACCESSO - DISTRUZIONE DA CONFERMARE
+		$form["to_destroy"] = array(
+			"#type" => "fieldset",
+			"#title" => t('Destroyer'),
+			"#description" => t('Use this page carefully'),
+		);
+		$form["to_destroy"]["elements"] = array(
+			"#markup" => t('These entities will be destroy').': <strong>'.$string.'</strong>',
+		);
+		$form["to_destroy"]["is_confirmed"] = array(
+			"#type" => 'hidden',
+			"#value" => 0, //NON CONFERMATO
+		);		
+		$form["confirm_deletion"] = array(
+			'#value' => t('Destroy'),
+			'#type' => 'submit',
+		);
+	}
+	return $form;	
+}
+/**
+ * Implements hook form validate
+ */
+function entity_bulk_management_destroy_form_validate($form,&$form_state){
+	return;
+}
+/**
+ * Implements hook form submit
+ */
+function entity_bulk_management_destroy_form_submit($form,&$form_state){
+	//Se la cancellazione e' da confermare (NON CONFERMATO)
+	if($form_state['values']['is_confirmed'] === 0){
+		$form_state['rebuild'] = TRUE;
+	} else { //se la cancellazione e' confermata devo eseguirla (CONFERMATO)
+		_destroy_entities($form_state);	
+	}
+}
+/**
+ * Implements destroy entity function
+ */
+function _destroy_entities($form_state){
+	$destroyable = variable_get("destroyable_entity_types",array());
+  $batch = array(  'title' => t('delete entities'), // Title of batch operation to display.  
+    'operations' => array(), // Operations to complete. Define array and fill the array below.  
+    'finished' => 'entity_bulk_management_delete_entities_batch_finished', // Last function to call.  
+    'init_message' => t('Initializing...'), //Message to display while the process is being built.  
+    'progress_message' => t('Operation @current out of @total.'), //Display what the current process it and how many total.  
+    'error_message' => t('CSV importing received a error.'),  
+  );
+
+	foreach($destroyable as $entity_type => $v){
+		if($v==!0){
+			//$etities = array_keys(entity_load($entity_type));
+       $query = new EntityFieldQuery();  
+       $entities = $query->entityCondition('entity_type', $entity_type)
+       ->execute();
+      if(isset($entities[$entity_type])){
+  			foreach($entities[$entity_type] as $k => $v){
+  	      $batch['operations'][] = array('entity_bulk_management_delete_entities_batch', array($entity_type,$k));         
+  			}
+			}
+			/*$res = entity_delete_multiple($entity_type, $etities);
+			if($res!==FALSE){ //operazione riuscita
+				drupal_set_message(t('Every entity has been deleted').' ( '.count($etities).' '. $entity_type.' )');
+			}*/
+		}
+	}
+	//dpm($batch);
+  batch_set($batch);
+  batch_process();
+}
+
+
+function entity_bulk_management_delete_entities_batch($entity_type,$k,&$context) {
+  entity_delete($entity_type,$k);
+  if (!isset($context['sandbox']['progress'])) {
+    $context['sandbox']['progress'] = 0;
+  }  
+  $context['sandbox']['progress']++;
+  
+  $context['message'] = t("entity has been deleted");  // Define this operation as finished so the we can move on to the next operation.  
+  $context['finished'] = 1;
+}
+
+
+function entity_bulk_management_delete_entities_batch_finished($success) {
+  if ($success) {  
+    $message = t('All nodes have been imported.');  
+  }  else { 
+     $message = t('Finished with error.'); 
+  }  
+  drupal_set_message($message); 
+}
+
+
+/**
+ * Fornisce la lista degli elementi che possono essere distrutti
+ */
+function _entity_bulk_management_get_deletable(){
+	$options = array();
+	//tutte le opzioni
+	$temp_options =  entity_get_info();
+	//eccezioni alle opzioni
+	$only_these = variable_get("destroyable_entity_types",array());
+	foreach($temp_options as $k => $v){
+		if(count($only_these)==0 || in_array($k,$only_these)){
+			$options[$k] = $k;
+		}
+	}
+	return $options;
+}
+/**
+ * Fornisce la lista degli elementi che possono essere importati/esportati
+ */
+function _entity_bulk_management_get_importable(){
+	$options = array();
+	//tutte le opzioni
+	$temp_options =  entity_get_info();
+	//eccezioni alle opzioni
+	$only_these = variable_get("entity_types_to_import_export",array());
+	foreach($temp_options as $k => $v){
+		if(count($only_these)==0 || in_array($k,$only_these)){
+			$options[$k] = $k;
+		}
+	}
+	return $options;
+}
+/**
+ * Questa funzione consente di configurare i parametri del modulo
+ */
+function entity_bulk_management_config_form($form,&$form_state){
+	$form = array();
+	$options = _entity_bulk_management_get_deletable();
+	$options_ie = _entity_bulk_management_get_importable();
+	$form["destroy_form"] = array(
+		'#type' => 'fieldset',
+		'#title' => t('Entity destroy settings'),
+		'#prefix' => '<div style="width:50%;float:left;">',
+		'#suffix' => '</div>',
+	);
+	$form["destroy_form"]["entity_types"] = array(
+		'#title' => t('Choose entities you need destroy'),
+		'#type' => 'checkboxes',
+		'#options' => $options,
+		'#default_value' => variable_get("destroyable_entity_types",array()),
+	);
+	$form["import_export_form"] = array(
+		'#type' => 'fieldset',
+		'#title' => t('Importable and Exportable entities'),
+		'#prefix' => '<div style="width:50%;float:left;">',
+		'#suffix' => '</div>',
+	);
+	$form["import_export_form"]["entity_types_to_import_export"] = array(
+		'#title' => t('Choose entities you need to import/export'),
+		'#type' => 'checkboxes',
+		'#options' => $options,
+		'#default_value' => variable_get("entity_types_to_import_export",array()),
+	);
+	$form["submit"] = array(
+		'#value' => t('Save'),
+		'#type' => 'submit',
+		'#prefix' => '<div class="clearfix">',
+		'#suffix' => '</div>',
+	
+	);
+	return $form;
+}
+/**
+ * Implements hook form validate
+ */
+function entity_bulk_management_config_form_validate($form,&$form_state){
+	return;
+}
+/**
+ * Implements hook form submit
+ */
+function entity_bulk_management_config_form_submit($form,&$form_state){
+	$arr_values = $form_state["values"]["entity_types"];
+	variable_set("destroyable_entity_types", $arr_values);
+	$arr_values = $form_state["values"]["entity_types_to_import_export"];
+	variable_set("entity_types_to_import_export", $arr_values);
+	drupal_set_message(t('Configuration saved.'));
+}

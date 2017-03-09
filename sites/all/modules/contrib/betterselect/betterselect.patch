@@ -1,0 +1,11 @@
+--- betterselect.module	2015-02-16 11:39:35.497000000 +0100
++++ betterselect_mod.module	2015-02-16 11:49:24.381094000 +0100
+@@ -134,7 +134,7 @@
+   $element = form_process_checkboxes($element);
+ 
+   // Hide the silly "None" option. (assumes array element with a blank key is the "None" option)
+-  if (empty($element['#required']) && is_array($element['_none'])) {
++  if (empty($element['#required'])  && isset($element['_none']) && is_array($element['_none'])) {
+     $element['_none']['#prefix'] = '<div style="display:none">';
+     $element['_none']['#suffix'] = '</div>';
+   }
